@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  # MongoDB 
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: testdb
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - mongodb_net      # Сеть 1: только для MongoDB
+      - prometheus_net   # Сеть 2: для exporter'а
+    ports:
+      - "27017:27017"    # Опционально: для отладки
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # MongoDB Exporter 
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.40.0
+    container_name: mongodb-exporter
+    restart: unless-stopped
+    command:
+      - '--mongodb.uri=mongodb://monitor:monitor123@mongodb:27017/admin?authSource=admin'
+      - '--collect-all'
+      - '--compatible-mode'
+    networks:
+      - mongodb_net      # Доступ к MongoDB
+      - prometheus_net   # Доступ для Prometheus
+    ports:
+      - "9216:9216"      # Web-интерфейс exporter'а
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - prometheus_net   # Только сеть Prometheus
+    depends_on:
+      - mongodb-exporter
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - prometheus_net   # Только сеть Prometheus
+    depends_on:
+      - prometheus
+
+# Networks 
+networks:
+  mongodb_net:
+    name: mongodb_network
+    driver: bridge
+  prometheus_net:
+    name: prometheus_network
+    driver: bridge
+
+# Volumes
+volumes:
+  mongodb_data:
+  prometheus_data:
+  grafana_data:
